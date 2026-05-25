@@ -1,137 +1,437 @@
-version: '3.9'
+# =============================================================================
+# SmartOLT Gateway — Production Docker Compose
+# =============================================================================
+#
+# Usage:
+#   docker compose up -d                          # producción
+#   docker compose --profile dev up -d            # + pgAdmin + Redis Commander
+#   docker compose --profile migrate run --rm migrate   # solo migraciones
+#
+# Requisitos previos:
+#   1. Copiar .env.example a .env y completar TODOS los valores obligatorios
+#   2. Las redes y volúmenes se crean automáticamente con docker compose up
+#
+# Variables obligatorias en .env:
+#   POSTGRES_PASSWORD, REDIS_PASSWORD, JWT_SECRET, API_KEY_SALT,
+#   APP_DOMAIN, ACME_EMAIL, TRAEFIK_DASHBOARD_CREDENTIALS
+# =============================================================================
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "10"
+    tag: "{{.Name}}"
+
+x-healthcheck-defaults: &healthcheck-defaults
+  interval: 15s
+  timeout: 5s
+  retries: 5
+  start_period: 30s
 
 services:
-  # ─────────────────────────────────────────────
-  # PostgreSQL
-  # ─────────────────────────────────────────────
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # PostgreSQL 16
+  # ───────────────────────────────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
     container_name: smartolt_postgres
     restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
+
     environment:
-      POSTGRES_USER: smartolt
-      POSTGRES_PASSWORD: smartolt_password
-      POSTGRES_DB: smartolt_db
-      POSTGRES_INITDB_ARGS: '--encoding=UTF8 --locale=en_US.UTF-8'
+      POSTGRES_USER:     ${POSTGRES_USER:-smartolt}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB:       ${POSTGRES_DB:-smartolt_db}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.UTF-8"
+      PGDATA: /var/lib/postgresql/data/pgdata
+
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - '5432:5432'
-    healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U smartolt -d smartolt_db']
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - smartolt_net
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro   # scripts opcionales de init
 
-  # ─────────────────────────────────────────────
-  # Redis
-  # ─────────────────────────────────────────────
+    expose: ["5432"]
+
+    healthcheck:
+      <<: *healthcheck-defaults
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-smartolt} -d ${POSTGRES_DB:-smartolt_db}
+
+    networks: [smartolt_internal]
+    logging: *logging
+
+    security_opt: [no-new-privileges:true]
+
+    deploy:
+      resources:
+        limits:
+          memory: ${POSTGRES_MEMORY_LIMIT:-1g}
+        reservations:
+          memory: 256m
+
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 65535
+        hard: 65535
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Redis 7
+  # ───────────────────────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     container_name: smartolt_redis
     restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+
     command: >
       redis-server
-      --requirepass smartolt_redis_password
-      --maxmemory 512mb
-      --maxmemory-policy allkeys-lru
-      --save 60 1
-      --loglevel notice
+      --requirepass       ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+      --maxmemory         ${REDIS_MAX_MEMORY:-512mb}
+      --maxmemory-policy  allkeys-lru
+      --appendonly        yes
+      --appendfsync       everysec
+      --save              900 1
+      --save              300 10
+      --save              60  10000
+      --loglevel          notice
+      --protected-mode    yes
+      --tcp-backlog       511
+      --timeout           300
+      --tcp-keepalive     60
+
     volumes:
       - redis_data:/data
-    ports:
-      - '6379:6379'
-    healthcheck:
-      test: ['CMD', 'redis-cli', '-a', 'smartolt_redis_password', 'ping']
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - smartolt_net
 
-  # ─────────────────────────────────────────────
+    expose: ["6379"]
+
+    healthcheck:
+      <<: *healthcheck-defaults
+      test:
+        - CMD
+        - sh
+        - -c
+        - redis-cli -a $$REDIS_PASSWORD ping | grep -q PONG
+
+    networks: [smartolt_internal]
+    logging: *logging
+
+    security_opt: [no-new-privileges:true]
+
+    sysctls:
+      net.core.somaxconn: 511
+
+    deploy:
+      resources:
+        limits:
+          memory: ${REDIS_MEMORY_LIMIT:-768m}
+        reservations:
+          memory: 128m
+
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 65535
+        hard: 65535
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Migraciones Prisma (job efímero, no queda corriendo)
+  # Ejecutar con: docker compose --profile migrate run --rm migrate
+  # También corre automáticamente antes del API en el arrange de CI/CD
+  # ───────────────────────────────────────────────────────────────────────────
+  migrate:
+    image: smartolt-gateway:${IMAGE_TAG:-latest}
+    container_name: smartolt_migrate
+    profiles: [migrate]
+    restart: "no"
+
+    command: ["npx", "prisma", "migrate", "deploy"]
+
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: >-
+        postgresql://${POSTGRES_USER:-smartolt}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-smartolt_db}?schema=public
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    networks: [smartolt_internal]
+    logging: *logging
+
+  # ───────────────────────────────────────────────────────────────────────────
   # SmartOLT Gateway API
-  # ─────────────────────────────────────────────
+  # ───────────────────────────────────────────────────────────────────────────
   api:
     build:
       context: .
       dockerfile: docker/Dockerfile
+      target: runner
+      args:
+        BUILD_DATE: ${BUILD_DATE:-unknown}
+        GIT_SHA:    ${GIT_SHA:-unknown}
+        VERSION:    ${VERSION:-1.0.0}
+    image: smartolt-gateway:${IMAGE_TAG:-latest}
     container_name: smartolt_api
     restart: unless-stopped
-    env_file:
-      - .env
+    init: true
+    stop_grace_period: 30s
+
+    env_file: [.env]
     environment:
-      DATABASE_URL: postgresql://smartolt:smartolt_password@postgres:5432/smartolt_db?schema=public
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      REDIS_PASSWORD: smartolt_redis_password
-      NODE_ENV: production
-    ports:
-      - '3000:3000'
+      NODE_ENV:     production
+      DATABASE_URL: >-
+        postgresql://${POSTGRES_USER:-smartolt}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-smartolt_db}?schema=public
+      REDIS_HOST:     redis
+      REDIS_PORT:     "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      APP_HOST:       0.0.0.0
+      APP_PORT:       "3000"
+
+    expose: ["3000"]
+
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:3000/live']
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    networks:
-      - smartolt_net
-    labels:
-      - 'traefik.enable=true'
-      - 'traefik.http.routers.smartolt.rule=Host(`smartolt.integracolombia.online`)'
-      - 'traefik.http.routers.smartolt.entrypoints=websecure'
-      - 'traefik.http.routers.smartolt.tls.certresolver=letsencrypt'
 
-  # ─────────────────────────────────────────────
-  # Redis Commander (UI - dev only)
-  # ─────────────────────────────────────────────
+    healthcheck:
+      <<: *healthcheck-defaults
+      interval: 30s
+      start_period: 45s
+      test:
+        - CMD
+        - wget
+        - --no-verbose
+        - --tries=1
+        - --spider
+        - http://localhost:3000/live
+
+    networks: [smartolt_internal, smartolt_external]
+    logging: *logging
+
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp:size=128m,mode=1777]
+
+    deploy:
+      resources:
+        limits:
+          memory: ${API_MEMORY_LIMIT:-512m}
+          cpus:   "${API_CPU_LIMIT:-1.0}"
+        reservations:
+          memory: 128m
+          cpus:   "0.25"
+
+    labels:
+      # ── Traefik routing ──────────────────────────────────────────────────
+      traefik.enable: "true"
+      traefik.docker.network: smartolt_external
+
+      # Router HTTPS
+      traefik.http.routers.smartolt.rule:            "Host(`${APP_DOMAIN:?APP_DOMAIN is required}`)"
+      traefik.http.routers.smartolt.entrypoints:     websecure
+      traefik.http.routers.smartolt.tls:             "true"
+      traefik.http.routers.smartolt.tls.certresolver: letsencrypt
+      traefik.http.routers.smartolt.middlewares:     "smartolt-chain@docker"
+      traefik.http.services.smartolt.loadbalancer.server.port: "3000"
+
+      # Middleware chain
+      traefik.http.middlewares.smartolt-chain.chain.middlewares: >-
+        smartolt-headers@docker,smartolt-ratelimit@docker,smartolt-compress@docker
+
+      # Security headers
+      traefik.http.middlewares.smartolt-headers.headers.stsSeconds:            "31536000"
+      traefik.http.middlewares.smartolt-headers.headers.stsIncludeSubdomains:  "true"
+      traefik.http.middlewares.smartolt-headers.headers.stsPreload:            "true"
+      traefik.http.middlewares.smartolt-headers.headers.forceSTSHeader:        "true"
+      traefik.http.middlewares.smartolt-headers.headers.contentTypeNosniff:    "true"
+      traefik.http.middlewares.smartolt-headers.headers.browserXssFilter:      "true"
+      traefik.http.middlewares.smartolt-headers.headers.referrerPolicy:        "strict-origin-when-cross-origin"
+      traefik.http.middlewares.smartolt-headers.headers.customFrameOptionsValue: "SAMEORIGIN"
+
+      # Rate limiting (100 req/s burst 50 por IP)
+      traefik.http.middlewares.smartolt-ratelimit.ratelimit.average: "100"
+      traefik.http.middlewares.smartolt-ratelimit.ratelimit.burst:   "50"
+      traefik.http.middlewares.smartolt-ratelimit.ratelimit.period:  "1s"
+
+      # Compresión
+      traefik.http.middlewares.smartolt-compress.compress: "true"
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Traefik v3 — Reverse proxy + TLS automático (Let's Encrypt)
+  # ───────────────────────────────────────────────────────────────────────────
+  traefik:
+    image: traefik:v3.3
+    container_name: smartolt_traefik
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 15s
+
+    command:
+      # API / Dashboard (solo expuesto en localhost, no público)
+      - --api.dashboard=true
+      - --api.insecure=false
+
+      # Provider Docker
+      - --providers.docker=true
+      - --providers.docker.network=smartolt_external
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.watch=true
+
+      # Entrypoints
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+
+      # Redirige HTTP → HTTPS globalmente
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.web.http.redirections.entrypoint.permanent=true
+
+      # TLS — Let's Encrypt (ACME)
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:?ACME_EMAIL is required}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.letsencrypt.acme.tlschallenge=true
+
+      # Logs
+      - --log.level=${TRAEFIK_LOG_LEVEL:-WARN}
+      - --log.format=json
+      - --accesslog=true
+      - --accesslog.format=json
+      - --accesslog.fields.defaultmode=keep
+      - --accesslog.fields.headers.defaultmode=drop
+
+      # Métricas (opcional, descomenta si usas Prometheus)
+      # - --metrics.prometheus=true
+      # - --metrics.prometheus.addEntryPointsLabels=true
+      # - --metrics.prometheus.addServicesLabels=true
+
+    ports:
+      - "80:80"
+      - "443:443"
+
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - letsencrypt_data:/letsencrypt
+
+    networks: [smartolt_external]
+    logging: *logging
+
+    security_opt: [no-new-privileges:true]
+
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+        reservations:
+          memory: 32m
+
+    labels:
+      traefik.enable: "true"
+      # Dashboard de Traefik (acceso por dominio interno, protegido con basicauth)
+      traefik.http.routers.traefik-dashboard.rule:            "Host(`traefik.${APP_DOMAIN}`)"
+      traefik.http.routers.traefik-dashboard.entrypoints:     websecure
+      traefik.http.routers.traefik-dashboard.tls.certresolver: letsencrypt
+      traefik.http.routers.traefik-dashboard.service:         api@internal
+      traefik.http.routers.traefik-dashboard.middlewares:     traefik-auth@docker
+      # Genera el hash con: echo $(htpasswd -nb admin password) | sed -e s/\\$/\\$\\$/g
+      traefik.http.middlewares.traefik-auth.basicauth.users:  "${TRAEFIK_DASHBOARD_CREDENTIALS:?TRAEFIK_DASHBOARD_CREDENTIALS is required}"
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Redis Commander   (solo con --profile dev)
+  # Acceso: http://localhost:8081
+  # ───────────────────────────────────────────────────────────────────────────
   redis-commander:
     image: rediscommander/redis-commander:latest
     container_name: smartolt_redis_ui
     restart: unless-stopped
-    profiles:
-      - dev
-    environment:
-      REDIS_HOSTS: local:redis:6379:0:smartolt_redis_password
-    ports:
-      - '8081:8081'
-    depends_on:
-      - redis
-    networks:
-      - smartolt_net
+    profiles: [dev]
 
-  # ─────────────────────────────────────────────
-  # pgAdmin (UI - dev only)
-  # ─────────────────────────────────────────────
+    environment:
+      REDIS_HOSTS:   "local:redis:6379:0:${REDIS_PASSWORD}"
+      HTTP_USER:     ${REDIS_COMMANDER_USER:-admin}
+      HTTP_PASSWORD: ${REDIS_COMMANDER_PASSWORD:-admin}
+
+    ports: ["127.0.0.1:8081:8081"]
+
+    depends_on:
+      redis:
+        condition: service_healthy
+
+    networks: [smartolt_internal]
+    logging: *logging
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # pgAdmin 4   (solo con --profile dev)
+  # Acceso: http://localhost:8080
+  # ───────────────────────────────────────────────────────────────────────────
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: smartolt_pgadmin
     restart: unless-stopped
-    profiles:
-      - dev
-    environment:
-      PGADMIN_DEFAULT_EMAIL: admin@smartolt.local
-      PGADMIN_DEFAULT_PASSWORD: admin
-    ports:
-      - '8080:80'
-    depends_on:
-      - postgres
-    networks:
-      - smartolt_net
+    profiles: [dev]
 
+    environment:
+      PGADMIN_DEFAULT_EMAIL:    ${PGADMIN_EMAIL:-admin@smartolt.local}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+      PGADMIN_LISTEN_PORT:      "80"
+
+    ports: ["127.0.0.1:8080:80"]
+
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    networks: [smartolt_internal]
+    logging: *logging
+
+# =============================================================================
+# Volumes
+# =============================================================================
 volumes:
   postgres_data:
     driver: local
+    driver_opts:
+      type: none
+      o:    bind
+      device: ${POSTGRES_DATA_PATH:-./data/postgres}
+
   redis_data:
     driver: local
+    driver_opts:
+      type: none
+      o:    bind
+      device: ${REDIS_DATA_PATH:-./data/redis}
 
+  pgadmin_data:
+    driver: local
+
+  letsencrypt_data:
+    driver: local
+
+# =============================================================================
+# Networks
+# =============================================================================
 networks:
-  smartolt_net:
+  # Red interna: solo los contenedores se ven entre sí (sin acceso desde host)
+  smartolt_internal:
     driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+
+  # Red pública: Traefik + API. Se crea automáticamente con este compose.
+  smartolt_external:
+    driver: bridge
+    name: traefik_public
+    ipam:
+      config:
+        - subnet: 172.21.0.0/24

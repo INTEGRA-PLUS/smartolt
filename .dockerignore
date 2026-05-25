@@ -1,0 +1,76 @@
+# =============================================================================
+# .dockerignore — SmartOLT Gateway
+# Excluye todo lo que no debe entrar al contexto de build de Docker.
+# Un contexto más pequeño = builds más rápidos y capas más pequeñas.
+# =============================================================================
+
+# Control de versiones
+.git
+.gitignore
+.gitattributes
+
+# Dependencias locales (se reinstalan en el build)
+node_modules
+
+# Archivos de entorno (NUNCA deben entrar a la imagen)
+.env
+.env.*
+!.env.example
+
+# Output del compilador (se genera en el build)
+dist/
+
+# Datos persistentes locales
+data/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Cobertura y tests
+coverage/
+.nyc_output/
+
+# Herramientas de desarrollo
+.eslintrc*
+.eslintignore
+.prettierrc*
+.prettierignore
+.editorconfig
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+
+# Docker (no hace falta incluirse a sí mismo)
+docker-compose*.yml
+.dockerignore
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Documentación
+*.md
+docs/
+
+# Archivos de test
+**/*.test.ts
+**/*.spec.ts
+**/__tests__/
+vitest.config.*
+
+# TypeScript (ya compilado a JS en dist/)
+tsconfig*.json
+
+# Prisma (se copia explícitamente en el Dockerfile)
+# prisma/migrations sí se necesita → no excluir prisma/

@@ -13,10 +13,10 @@ export const cacheConfig = {
 };
 
 export const queueNames = {
-  onuOperations: 'onu:operations',
-  backgroundSync: 'background:sync',
-  cacheWarmer: 'cache:warmer',
-  auditLog: 'audit:log',
+  onuOperations: 'onu-operations',
+  backgroundSync: 'background-sync',
+  cacheWarmer: 'cache-warmer',
+  auditLog: 'audit-log',
 } as const;
 
 export const circuitBreakerConfig = {
