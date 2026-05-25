@@ -1,0 +1,137 @@
+version: '3.9'
+
+services:
+  # ─────────────────────────────────────────────
+  # PostgreSQL
+  # ─────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: smartolt_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: smartolt
+      POSTGRES_PASSWORD: smartolt_password
+      POSTGRES_DB: smartolt_db
+      POSTGRES_INITDB_ARGS: '--encoding=UTF8 --locale=en_US.UTF-8'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - '5432:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U smartolt -d smartolt_db']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - smartolt_net
+
+  # ─────────────────────────────────────────────
+  # Redis
+  # ─────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: smartolt_redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --requirepass smartolt_redis_password
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --save 60 1
+      --loglevel notice
+    volumes:
+      - redis_data:/data
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', '-a', 'smartolt_redis_password', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - smartolt_net
+
+  # ─────────────────────────────────────────────
+  # SmartOLT Gateway API
+  # ─────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: smartolt_api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://smartolt:smartolt_password@postgres:5432/smartolt_db?schema=public
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: smartolt_redis_password
+      NODE_ENV: production
+    ports:
+      - '3000:3000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:3000/live']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - smartolt_net
+    labels:
+      - 'traefik.enable=true'
+      - 'traefik.http.routers.smartolt.rule=Host(`smartolt.integracolombia.online`)'
+      - 'traefik.http.routers.smartolt.entrypoints=websecure'
+      - 'traefik.http.routers.smartolt.tls.certresolver=letsencrypt'
+
+  # ─────────────────────────────────────────────
+  # Redis Commander (UI - dev only)
+  # ─────────────────────────────────────────────
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: smartolt_redis_ui
+    restart: unless-stopped
+    profiles:
+      - dev
+    environment:
+      REDIS_HOSTS: local:redis:6379:0:smartolt_redis_password
+    ports:
+      - '8081:8081'
+    depends_on:
+      - redis
+    networks:
+      - smartolt_net
+
+  # ─────────────────────────────────────────────
+  # pgAdmin (UI - dev only)
+  # ─────────────────────────────────────────────
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: smartolt_pgadmin
+    restart: unless-stopped
+    profiles:
+      - dev
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@smartolt.local
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - '8080:80'
+    depends_on:
+      - postgres
+    networks:
+      - smartolt_net
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  smartolt_net:
+    driver: bridge

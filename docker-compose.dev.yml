@@ -1,0 +1,34 @@
+version: '3.9'
+
+# Development override - starts only infrastructure services
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+
+services:
+  postgres:
+    ports:
+      - '5432:5432'
+
+  redis:
+    ports:
+      - '6379:6379'
+
+  redis-commander:
+    profiles: []
+
+  pgadmin:
+    profiles: []
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: deps
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: npm run dev
+    environment:
+      NODE_ENV: development
+    ports:
+      - '3000:3000'
+      - '9229:9229'

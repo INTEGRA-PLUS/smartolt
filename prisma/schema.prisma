@@ -1,0 +1,153 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TenantStatus {
+  active
+  inactive
+  suspended
+}
+
+enum ApiKeyStatus {
+  active
+  inactive
+  revoked
+}
+
+enum JobStatus {
+  pending
+  active
+  completed
+  failed
+  delayed
+}
+
+enum AuditStatus {
+  success
+  failed
+  pending
+}
+
+model Tenant {
+  id          String       @id @default(uuid())
+  name        String
+  subdomain   String       @unique
+  xToken      String
+  isActive    Boolean      @default(true)
+  status      TenantStatus @default(active)
+  description String?
+
+  // Cache rules (TTL overrides in seconds, keyed by endpoint category)
+  cacheRules Json @default("{}")
+
+  // Rate limits
+  rateLimitPerMinute Int @default(100)
+  rateLimitBurst     Int @default(200)
+
+  // Metadata
+  contactEmail String?
+  contactName  String?
+  metadata     Json    @default("{}")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  apiKeys   ApiKey[]
+  auditLogs AuditLog[]
+  users     User[]
+
+  @@index([subdomain])
+  @@index([status])
+  @@map("tenants")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  tenantId     String
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         String   @default("client")
+  isActive     Boolean  @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([email])
+  @@map("users")
+}
+
+model ApiKey {
+  id          String      @id @default(uuid())
+  tenantId    String
+  name        String
+  keyHash     String      @unique
+  keyPrefix   String
+  status      ApiKeyStatus @default(active)
+  permissions Json        @default("[]")
+  expiresAt   DateTime?
+  lastUsedAt  DateTime?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([keyHash])
+  @@map("api_keys")
+}
+
+model AuditLog {
+  id         String      @id @default(uuid())
+  tenantId   String
+  action     String
+  resource   String
+  resourceId String?
+  status     AuditStatus @default(pending)
+  requestId  String?
+  ipAddress  String?
+  userAgent  String?
+  metadata   Json        @default("{}")
+  createdAt  DateTime    @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([action])
+  @@index([createdAt])
+  @@index([resource, resourceId])
+  @@map("audit_logs")
+}
+
+model QueueJob {
+  id          String    @id @default(uuid())
+  tenantId    String
+  queueName   String
+  jobId       String
+  operation   String
+  status      JobStatus @default(pending)
+  payload     Json
+  result      Json?
+  error       String?
+  attempts    Int       @default(0)
+  requestId   String?
+  scheduledAt DateTime?
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([tenantId])
+  @@index([jobId])
+  @@index([status])
+  @@index([queueName])
+  @@map("queue_jobs")
+}
