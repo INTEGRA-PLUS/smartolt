@@ -53,6 +53,10 @@ services:
       - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro   # scripts opcionales de init
 
     expose: ["5432"]
+    # Puerto accesible solo desde el propio servidor (SSH tunnel desde tu PC)
+    # Usamos 5433 para no chocar con otros Postgres que ya corran en el host
+    ports:
+      - "127.0.0.1:${POSTGRES_LOCAL_PORT:-5433}:5432"
 
     healthcheck:
       <<: *healthcheck-defaults
@@ -380,7 +384,7 @@ services:
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
       PGADMIN_LISTEN_PORT:      "80"
 
-    ports: ["127.0.0.1:8080:80"]
+    ports: ["127.0.0.1:5050:80"]
 
     volumes:
       - pgadmin_data:/var/lib/pgadmin
