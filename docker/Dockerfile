@@ -24,7 +24,7 @@ COPY package.json package-lock.json ./
 COPY prisma ./prisma/
 
 # Instalar todas las deps (incl. devDeps necesarias para generar Prisma)
-RUN npm ci --frozen-lockfile
+RUN npm ci
 
 # Generar Prisma client
 RUN npx prisma generate
@@ -86,15 +86,14 @@ RUN apk add --no-cache openssl wget dumb-init && \
 
 # Copiar solo lo necesario para producción:
 # 1. Solo las prod deps (sin devDependencies)
-COPY --from=deps    --chown=smartolt:nodejs /app/prisma         ./prisma
-COPY --from=builder --chown=smartolt:nodejs /app/dist           ./dist
-COPY --from=builder --chown=smartolt:nodejs /app/package.json   ./package.json
+COPY --from=deps    --chown=smartolt:nodejs /app/prisma              ./prisma
+COPY --from=builder --chown=smartolt:nodejs /app/dist                ./dist
+COPY --from=builder --chown=smartolt:nodejs /app/package.json        ./package.json
+COPY --from=builder --chown=smartolt:nodejs /app/package-lock.json   ./package-lock.json
 
 # Reinstalar solo prod deps para imagen más pequeña y sin devDeps
-RUN npm ci --frozen-lockfile --omit=dev && \
-    # Regenerar Prisma client con las prod deps
+RUN npm ci --omit=dev && \
     npx prisma generate && \
-    # Limpiar cache de npm
     npm cache clean --force
 
 # Cambiar al usuario no-root
