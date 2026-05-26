@@ -148,6 +148,10 @@ services:
   # También corre automáticamente antes del API en el arrange de CI/CD
   # ───────────────────────────────────────────────────────────────────────────
   migrate:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: runner
     image: smartolt-gateway:${IMAGE_TAG:-latest}
     container_name: smartolt_migrate
     profiles: [migrate]
