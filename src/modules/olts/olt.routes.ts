@@ -6,13 +6,13 @@ export async function oltRoutes(app: FastifyInstance) {
 
   app.get('/', { ...opts, schema: { tags: ['OLTs'], summary: 'Get all OLTs (cached)' } }, getOLTs);
 
-  app.get(
+  app.get<{ Params: { oltId: string } }>(
     '/:oltId',
     { ...opts, schema: { tags: ['OLTs'], summary: 'Get OLT detail' } },
     getOLTDetail,
   );
 
-  app.get(
+  app.get<{ Params: { oltId: string } }>(
     '/:oltId/running-config',
     { ...opts, schema: { tags: ['OLTs'], summary: 'Get OLT running configuration' } },
     getRunningConfig,

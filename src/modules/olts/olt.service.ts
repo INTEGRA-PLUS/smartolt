@@ -63,7 +63,7 @@ export class OLTService {
     return response.data;
   }
 
-  async invalidateCache(tenantId: string): Promise<number> {
+  async invalidateCache(_tenantId: string): Promise<number> {
     return cacheService.deleteByTag('olts');
   }
 }

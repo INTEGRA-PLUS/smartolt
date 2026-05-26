@@ -1,8 +1,6 @@
-import { Queue, Worker, QueueEvents, Job } from 'bullmq';
-import { getRedisClient } from '../../infrastructure/redis/redis';
+import { Queue, Worker, Job } from 'bullmq';
 import { logger } from '../../shared/utils/logger';
 import { env } from '../../config/env';
-import { queueNames } from '../../config';
 
 const connection = {
   host: env.REDIS_HOST,
@@ -28,7 +26,6 @@ export interface QueueJobResult {
 class QueueService {
   private queues = new Map<string, Queue>();
   private workers = new Map<string, Worker>();
-  private events = new Map<string, QueueEvents>();
 
   getQueue(name: string): Queue {
     if (!this.queues.has(name)) {

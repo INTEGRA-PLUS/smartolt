@@ -33,7 +33,7 @@ export function globalErrorHandler(
       error: {
         code: error.code,
         message: error.message,
-        ...(error.details && { details: error.details }),
+        ...(error.details !== undefined ? { details: error.details } : {}),
       },
       requestId,
     });

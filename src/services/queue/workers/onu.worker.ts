@@ -1,4 +1,5 @@
 import { Job } from 'bullmq';
+import { Prisma } from '@prisma/client';
 import { queueService, QueueJobData, QueueJobResult } from '../QueueService';
 import { smartOLTClient } from '../../smartolt/SmartOLTClient';
 import { SMARTOLT_ENDPOINTS } from '../../smartolt/smartolt.endpoints';
@@ -57,7 +58,7 @@ async function processor(
         jobId: job.id,
         payload,
         result: result.data,
-      },
+      } as Prisma.InputJsonValue,
     },
   });
 

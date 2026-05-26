@@ -1,4 +1,3 @@
-import crypto from 'crypto';
 import { FastifyInstance } from 'fastify';
 import { prisma } from '../../infrastructure/database/prisma';
 import { UnauthorizedError } from '../../shared/errors/AppError';

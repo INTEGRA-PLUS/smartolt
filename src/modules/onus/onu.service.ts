@@ -4,7 +4,7 @@ import { queueService } from '../../services/queue/QueueService';
 import { SMARTOLT_ENDPOINTS } from '../../services/smartolt/smartolt.endpoints';
 import { buildCacheKey } from '../../shared/utils/helpers';
 import { cacheConfig, queueNames } from '../../config';
-import type { TenantContext, JobResult } from '../../shared/types/common.types';
+import type { TenantContext } from '../../shared/types/common.types';
 import type { ONU, ONUStatus, SignalLevel, ONUType } from '../../services/smartolt/smartolt.types';
 import type { RebootONUDto, AuthorizeONUDto, MoveONUDto, EnableDisableONUDto, DeleteONUDto } from './onu.schema';
 
