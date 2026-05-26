@@ -406,17 +406,9 @@ services:
 volumes:
   postgres_data:
     driver: local
-    driver_opts:
-      type: none
-      o:    bind
-      device: ${POSTGRES_DATA_PATH:-./data/postgres}
 
   redis_data:
     driver: local
-    driver_opts:
-      type: none
-      o:    bind
-      device: ${REDIS_DATA_PATH:-./data/redis}
 
   pgadmin_data:
     driver: local

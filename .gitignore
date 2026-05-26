@@ -47,6 +47,3 @@ prisma/migrations/*.sql.bak
 # Temp
 tmp/
 temp/
-
-# Docker persistent data (bind mounts)
-data/
