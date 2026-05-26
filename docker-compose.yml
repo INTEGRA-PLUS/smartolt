@@ -432,14 +432,8 @@ networks:
   smartolt_internal:
     driver: bridge
     internal: true
-    ipam:
-      config:
-        - subnet: 172.20.0.0/24
 
   # Red pública: Traefik + API. Se crea automáticamente con este compose.
   smartolt_external:
     driver: bridge
     name: traefik_public
-    ipam:
-      config:
-        - subnet: 172.21.0.0/24
