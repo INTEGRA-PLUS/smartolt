@@ -224,7 +224,8 @@ services:
     logging: *logging
 
     security_opt: [no-new-privileges:true]
-    tmpfs: [/tmp:size=128m,mode=1777]
+    tmpfs:
+      - "/tmp:size=128m,mode=1777"
 
     deploy:
       resources:
