@@ -12,8 +12,13 @@
 #   2. Las redes y volúmenes se crean automáticamente con docker compose up
 #
 # Variables obligatorias en .env:
-#   POSTGRES_PASSWORD, REDIS_PASSWORD, JWT_SECRET, API_KEY_SALT,
-#   APP_DOMAIN, ACME_EMAIL, TRAEFIK_DASHBOARD_CREDENTIALS
+#   POSTGRES_PASSWORD, REDIS_PASSWORD, JWT_SECRET, API_KEY_SALT
+#
+# Arquitectura:
+#   Nginx (host)  ─→  127.0.0.1:3001  ─→  container smartolt_api:3000
+#
+#   Nginx del sistema hace de reverse proxy + TLS.
+#   La API NO se expone a internet directamente.
 # =============================================================================
 
 x-logging: &logging
@@ -200,7 +205,11 @@ services:
       APP_HOST:       0.0.0.0
       APP_PORT:       "3000"
 
-    expose: ["3000"]
+    # Expone el puerto SOLO al loopback del host (127.0.0.1)
+    # Tu Nginx del host hace de reverse proxy hacia este puerto.
+    # Nada fuera del servidor puede llegar directo a la API.
+    ports:
+      - "127.0.0.1:${API_PORT_HOST:-3001}:3000"
 
     depends_on:
       postgres:
@@ -220,7 +229,7 @@ services:
         - --spider
         - http://localhost:3000/live
 
-    networks: [smartolt_internal, smartolt_external]
+    networks: [smartolt_internal]
     logging: *logging
 
     security_opt: [no-new-privileges:true]
@@ -235,120 +244,6 @@ services:
         reservations:
           memory: 128m
           cpus:   "0.25"
-
-    labels:
-      # ── Traefik routing ──────────────────────────────────────────────────
-      traefik.enable: "true"
-      traefik.docker.network: smartolt_external
-
-      # Router HTTPS
-      traefik.http.routers.smartolt.rule:            "Host(`${APP_DOMAIN:?APP_DOMAIN is required}`)"
-      traefik.http.routers.smartolt.entrypoints:     websecure
-      traefik.http.routers.smartolt.tls:             "true"
-      traefik.http.routers.smartolt.tls.certresolver: letsencrypt
-      traefik.http.routers.smartolt.middlewares:     "smartolt-chain@docker"
-      traefik.http.services.smartolt.loadbalancer.server.port: "3000"
-
-      # Middleware chain
-      traefik.http.middlewares.smartolt-chain.chain.middlewares: >-
-        smartolt-headers@docker,smartolt-ratelimit@docker,smartolt-compress@docker
-
-      # Security headers
-      traefik.http.middlewares.smartolt-headers.headers.stsSeconds:            "31536000"
-      traefik.http.middlewares.smartolt-headers.headers.stsIncludeSubdomains:  "true"
-      traefik.http.middlewares.smartolt-headers.headers.stsPreload:            "true"
-      traefik.http.middlewares.smartolt-headers.headers.forceSTSHeader:        "true"
-      traefik.http.middlewares.smartolt-headers.headers.contentTypeNosniff:    "true"
-      traefik.http.middlewares.smartolt-headers.headers.browserXssFilter:      "true"
-      traefik.http.middlewares.smartolt-headers.headers.referrerPolicy:        "strict-origin-when-cross-origin"
-      traefik.http.middlewares.smartolt-headers.headers.customFrameOptionsValue: "SAMEORIGIN"
-
-      # Rate limiting (100 req/s burst 50 por IP)
-      traefik.http.middlewares.smartolt-ratelimit.ratelimit.average: "100"
-      traefik.http.middlewares.smartolt-ratelimit.ratelimit.burst:   "50"
-      traefik.http.middlewares.smartolt-ratelimit.ratelimit.period:  "1s"
-
-      # Compresión
-      traefik.http.middlewares.smartolt-compress.compress: "true"
-
-  # ───────────────────────────────────────────────────────────────────────────
-  # Traefik v3 — Reverse proxy + TLS automático (Let's Encrypt)
-  # ───────────────────────────────────────────────────────────────────────────
-  traefik:
-    image: traefik:v3.3
-    container_name: smartolt_traefik
-    restart: unless-stopped
-    init: true
-    stop_grace_period: 15s
-
-    command:
-      # API / Dashboard (solo expuesto en localhost, no público)
-      - --api.dashboard=true
-      - --api.insecure=false
-
-      # Provider Docker
-      - --providers.docker=true
-      - --providers.docker.network=smartolt_external
-      - --providers.docker.exposedbydefault=false
-      - --providers.docker.watch=true
-
-      # Entrypoints
-      - --entrypoints.web.address=:80
-      - --entrypoints.websecure.address=:443
-
-      # Redirige HTTP → HTTPS globalmente
-      - --entrypoints.web.http.redirections.entrypoint.to=websecure
-      - --entrypoints.web.http.redirections.entrypoint.scheme=https
-      - --entrypoints.web.http.redirections.entrypoint.permanent=true
-
-      # TLS — Let's Encrypt (ACME)
-      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:?ACME_EMAIL is required}
-      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
-      - --certificatesresolvers.letsencrypt.acme.tlschallenge=true
-
-      # Logs
-      - --log.level=${TRAEFIK_LOG_LEVEL:-WARN}
-      - --log.format=json
-      - --accesslog=true
-      - --accesslog.format=json
-      - --accesslog.fields.defaultmode=keep
-      - --accesslog.fields.headers.defaultmode=drop
-
-      # Métricas (opcional, descomenta si usas Prometheus)
-      # - --metrics.prometheus=true
-      # - --metrics.prometheus.addEntryPointsLabels=true
-      # - --metrics.prometheus.addServicesLabels=true
-
-    ports:
-      - "80:80"
-      - "443:443"
-
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - letsencrypt_data:/letsencrypt
-
-    networks: [smartolt_external]
-    logging: *logging
-
-    security_opt: [no-new-privileges:true]
-
-    deploy:
-      resources:
-        limits:
-          memory: 128m
-        reservations:
-          memory: 32m
-
-    labels:
-      traefik.enable: "true"
-      # Dashboard de Traefik (acceso por dominio interno, protegido con basicauth)
-      traefik.http.routers.traefik-dashboard.rule:            "Host(`traefik.${APP_DOMAIN}`)"
-      traefik.http.routers.traefik-dashboard.entrypoints:     websecure
-      traefik.http.routers.traefik-dashboard.tls.certresolver: letsencrypt
-      traefik.http.routers.traefik-dashboard.service:         api@internal
-      traefik.http.routers.traefik-dashboard.middlewares:     traefik-auth@docker
-      # Genera el hash con: echo $(htpasswd -nb admin password) | sed -e s/\\$/\\$\\$/g
-      traefik.http.middlewares.traefik-auth.basicauth.users:  "${TRAEFIK_DASHBOARD_CREDENTIALS:?TRAEFIK_DASHBOARD_CREDENTIALS is required}"
 
   # ───────────────────────────────────────────────────────────────────────────
   # Redis Commander   (solo con --profile dev)
@@ -414,19 +309,13 @@ volumes:
   pgadmin_data:
     driver: local
 
-  letsencrypt_data:
-    driver: local
-
 # =============================================================================
 # Networks
 # =============================================================================
 networks:
-  # Red interna: solo los contenedores se ven entre sí (sin acceso desde host)
+  # Red bridge para todos los servicios del stack.
+  # Postgres y Redis usan `expose:` (no `ports:`) → no son accesibles
+  # desde el host ni desde internet, solo desde otros containers.
+  # La API sí necesita salida a internet (llama a SmartOLT API externa).
   smartolt_internal:
     driver: bridge
-    internal: true
-
-  # Red pública: Traefik + API. Se crea automáticamente con este compose.
-  smartolt_external:
-    driver: bridge
-    name: traefik_public
