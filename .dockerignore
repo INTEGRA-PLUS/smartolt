@@ -69,8 +69,8 @@ docs/
 **/__tests__/
 vitest.config.*
 
-# TypeScript (ya compilado a JS en dist/)
-tsconfig*.json
+# TypeScript configs son necesarios en el build stage — no excluir
+# tsconfig*.json
 
 # Prisma (se copia explícitamente en el Dockerfile)
 # prisma/migrations sí se necesita → no excluir prisma/
